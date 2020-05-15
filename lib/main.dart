@@ -1,6 +1,23 @@
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
-void main() => runApp(MyApp());
+final FirebaseAuth _auth = FirebaseAuth.instance;
+final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: <String>[
+  'profile',
+  'https://www.googleapis.com/auth/photoslibrary',
+  'https://www.googleapis.com/auth/photoslibrary.sharing'
+]);
+
+void main() {
+  Crashlytics.instance.enableInDevMode = true;
+  FlutterError.onError = Crashlytics.instance.recordFlutterError;
+  runZoned<Future<void>>(() async {
+    runApp(MyApp());
+  }, onError: Crashlytics.instance.recordError);
+}
 
 class MyApp extends StatelessWidget {
   // This widget is the root of your application.
@@ -45,6 +62,54 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   int _counter = 0;
+  FirebaseUser _currentUser;
+
+  @override
+  void initState() {
+    super.initState();
+    new Future(() async{
+      if (await _handleSignIn(await _googleSignIn.signInSilently())) {
+        _handleGetContact();
+      }
+    });
+  }
+
+  Future<void> _handleGetContact() async {
+  }
+
+  Future<bool> _handleSignIn(GoogleSignInAccount googleSignInAccount) async {
+    if (googleSignInAccount == null) {
+      return false;
+    }
+    final GoogleSignInAuthentication googleSignInAuthentication = await googleSignInAccount.authentication;
+    final AuthCredential credential = GoogleAuthProvider.getCredential(
+      accessToken: googleSignInAuthentication.accessToken,
+      idToken: googleSignInAuthentication.idToken,
+    );
+    final AuthResult authResult = await _auth.signInWithCredential(credential);
+    final FirebaseUser user = authResult.user;
+    if (user.isAnonymous) {
+      return false;
+    }
+    if (await user.getIdToken() == null) {
+      return false;
+    }
+    final FirebaseUser currentUser = await _auth.currentUser();
+    if (user.uid != currentUser.uid) {
+      return false;
+    }
+    setState(() {
+      _currentUser = currentUser;
+    });
+    return true;
+  }
+
+  Future<void> _handleSignOut() async {
+    await _googleSignIn.signOut();
+    setState(() {
+      _currentUser = null;
+    });
+  }
 
   void _incrementCounter() {
     setState(() {
@@ -55,6 +120,50 @@ class _MyHomePageState extends State<MyHomePage> {
       // called again, and so nothing would appear to happen.
       _counter++;
     });
+  }
+
+  Widget _buildGoogleSignInBody() {
+    if (_currentUser != null) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: <Widget>[
+          Card(
+            color: Colors.lightBlueAccent,
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundImage: NetworkImage(
+                  _currentUser.photoUrl,
+                ),
+                radius: 30,
+                backgroundColor: Colors.transparent,
+              ),
+              title: Text(_currentUser.displayName ?? ''),
+              subtitle: Text(_currentUser.email ?? ''),
+            ),
+          ),
+          const Text("Signed in successfully."),
+          RaisedButton(
+            child: const Text('SIGN OUT'),
+            onPressed: _handleSignOut,
+          ),
+        ],
+      );
+    } else {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: <Widget>[
+          const Text("You are not currently signed in."),
+          RaisedButton(
+            child: const Text('SIGN IN'),
+            onPressed: () async{
+              if (await _handleSignIn(await _googleSignIn.signIn())) {
+                _handleGetContact();
+              }
+            }
+          ),
+        ],
+      );
+    }
   }
 
   @override
@@ -98,6 +207,57 @@ class _MyHomePageState extends State<MyHomePage> {
               '$_counter',
               style: Theme.of(context).textTheme.display1,
             ),
+            Text(
+              'Firebase Crashlytics Tests:',
+            ),
+            FlatButton(
+                child: const Text('Key'),
+                onPressed: () {
+                  Crashlytics.instance.setString('foo', 'bar');
+                }),
+            FlatButton(
+                child: const Text('Log'),
+                onPressed: () {
+                  Crashlytics.instance.log('baz');
+                }),
+            FlatButton(
+                child: const Text('Crash'),
+                onPressed: () {
+                  // Use Crashlytics to throw an error. Use this for
+                  // confirmation that errors are being correctly reported.
+                  Crashlytics.instance.crash();
+                }),
+            FlatButton(
+                child: const Text('Throw Error'),
+                onPressed: () {
+                  // Example of thrown error, it will be caught and sent to
+                  // Crashlytics.
+                  throw StateError('Uncaught error thrown by app.');
+                }),
+            FlatButton(
+                child: const Text('Async out of bounds'),
+                onPressed: () {
+                  // Example of an exception that does not get caught
+                  // by `FlutterError.onError` but is caught by the `onError` handler of
+                  // `runZoned`.
+                  Future<void>.delayed(const Duration(seconds: 2), () {
+                    final List<int> list = <int>[];
+                    print(list[100]);
+                  });
+                }),
+            FlatButton(
+                child: const Text('Record Error'),
+                onPressed: () {
+                  try {
+                    throw 'error_example';
+                  } catch (e, s) {
+                    // "context" will append the word "thrown" in the
+                    // Crashlytics console.
+                    Crashlytics.instance
+                        .recordError(e, s, context: 'as an example');
+                  }
+                }),
+            _buildGoogleSignInBody(),
           ],
         ),
       ),
